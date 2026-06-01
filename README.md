@@ -16,7 +16,7 @@ If you have been given a link to this repository or to `spec.md`, you are expect
 read the spec and generate or interpret DXF-CSV content accordingly.
 
 **Read the spec:**
-`https://raw.githubusercontent.com/dwgsync/dxf-csv/main/spec.md`
+`https://raw.githubusercontent.com/drawingsync/dxf-csv/main/spec.md`
 
 **Quick start for generation:** Use `sha1:396cb2c5a30e` (empty AutoCAD 2018 template)
 when generating a DXF-CSV from scratch. Include `name[2]` in every header.
@@ -31,7 +31,7 @@ office furniture layouts, and paper space title blocks — all imported into Aut
 
 **Drawing Sync** is the AutoCAD plug-in that produces and consumes DXF-CSV files.
 
-- Autodesk App Store: [Drawing Sync](https://apps.autodesk.com)
+- Autodesk App Store: [Drawing Sync](https://apps.autodesk.com/ACD/en/Detail/Index?id=2869345163028381616&appLang=en&os=Win64)
 - Direct download: `https://drawingsync.com/downloads/DrawingSync-2027-x64.msi`
 - Command reference: `https://drawingsync.com/docs/help.html`
 
