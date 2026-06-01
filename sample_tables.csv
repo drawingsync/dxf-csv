@@ -1,0 +1,24 @@
+﻿type,name[2],text[3],linetype[6],real[40],real[49],color[62],int[70],int[74],char[271],char[272],char[277],lwt[370]
+LTYPE,CENTER,Center ____ _ ____ _ ____ _ ____ _ ____ _ ____,,2.0,"1.25,-0.25,0.25,-0.25",,,"0,0,0,0",,,,
+LTYPE,HIDDEN,Hidden __ __ __ __ __ __ __ __ __ __ __ __ __ _,,0.375,"0.25,-0.125",,,"0,0",,,,
+LTYPE,DASHED,Dashed __ __ __ __ __ __ __ __ __ __ __ __ __ _,,0.75,"0.5,-0.25",,,"0,0",,,,
+LTYPE,PHANTOM,Phantom ______  __  __  ______  __  __  ______,,2.5,"1.25,-0.25,0.25,-0.25,0.25,-0.25",,,"0,0,0,0,0,0",,,,
+LAYER,0,,Continuous,,,7,,,,,,
+LAYER,WALLS,,Continuous,,,7,,,,,,50
+LAYER,DOORS,,Continuous,,,1,,,,,,25
+LAYER,WINDOWS,,Continuous,,,4,,,,,,25
+LAYER,DIMENSIONS,,Continuous,,,2,,,,,,
+LAYER,HATCH,,Continuous,,,8,,,,,,
+LAYER,CENTERLINES,,CENTER,,,1,,,,,,
+LAYER,HIDDEN,,HIDDEN,,,8,,,,,,
+LAYER,TEXT,,Continuous,,,3,,,,,,
+STYLE,Standard,txt,,,,,,,,,,
+STYLE,ROMANS,romans.shx,,,,,,,,,,
+STYLE,ANNOTATIVE,txt.shx,,,,,,,,,,
+DIMSTYLE,Standard,,,,,,,,,,,
+DIMSTYLE,arch,,,,,,,,2,2,4,
+SECTION,ENTITIES,,,,,,,,,,,
+ENDSEC,,,,,,,,,,,,
+
+#DXF-CSV v1.0 | audience:ai | source:Drawing1-s.dwg | sha1:d5cfc57169da | codes:dxf-2018 | dxfcsv:https://drawingsync.com/dxfcsv/v1.0/spec.md | last-updated:2026-05-10 | units:unitless | coords:xyz | design:r12-extended | color:aci absent=BYLAYER | missing:linetype=BYLAYER color=BYBLOCK lwt=-3
+

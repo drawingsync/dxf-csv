@@ -1,0 +1,32 @@
+﻿type,text[1],name[2],text[3],linetype[6],layer[8],pt[10],pt[11],pt[13],pt[14],real[40],color[62],int[70],int[72]
+SECTION,,TABLES,,,,,,,,,,,
+LTYPE,,CONTINUOUS,,,,,,,,,,,
+LTYPE,,CENTER,,,,,,,,,,,
+LTYPE,,DASHED,,,,,,,,,,,
+LAYER,,profile,,CONTINUOUS,,,,,,,7,,
+LAYER,,holes,,CONTINUOUS,,,,,,,4,,
+LAYER,,dimensions,,CONTINUOUS,,,,,,,2,,
+LAYER,,annotations,,CONTINUOUS,,,,,,,3,,
+LAYER,,centerlines,,CENTER,,,,,,,1,,
+LAYER,,construction,,DASHED,,,,,,,8,,
+DIMSTYLE,,ISO-25,,,,,,,,,,,
+ENDSEC,,,,,,,,,,,,,
+SECTION,,BLOCKS,,,,,,,,,,,
+ENDSEC,,,,,,,,,,,,,
+SECTION,,ENTITIES,,,,,,,,,,,
+LWPOLYLINE,,,,,profile,"0,0 80,0 80,10 10,10 10,40 0,40",,,,,,1,
+CIRCLE,,,,,holes,"20,25",,,,5,,,
+CIRCLE,,,,,holes,"50,25",,,,5,,,
+LINE,,,,,centerlines,"20,15","20,35",,,,,,
+LINE,,,,,centerlines,"10,25","30,25",,,,,,
+LINE,,,,,centerlines,"50,15","50,35",,,,,,
+LINE,,,,,centerlines,"40,25","60,25",,,,,,
+LINE,,,,,construction,"-5,25","85,25",,,,,,
+TEXT,BRACKET PROFILE,,,,annotations,"40,48",,,,3,,,1
+TEXT,2x R5.0,,,,annotations,"35,8",,,,2,,,1
+TEXT,NOTE: All dims in mm,,,,annotations,"0,-8",,,,1.8,,,
+DIMENSION,,,ISO-25,,dimensions,"80,-15","40,-13","0,0","80,0",,,,
+ENDSEC,,,,,,,,,,,,,
+
+
+#DXF-CSV v1.0 | audience:ai | source:sample_aigenerated.dwg | sha1:396cb2c5a30e | codes:dxf-2018 | dxfcsv:https://drawingsync.com/dxfcsv/v1.0/spec.md | last-updated:2026-04-29 | units:mm | coords:xy z-absent=truly-2D | design:r12-extended | color:aci absent=BYLAYER | missing:linetype=BYLAYER color=BYBLOCK lwt=-3
