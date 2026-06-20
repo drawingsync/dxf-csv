@@ -123,7 +123,7 @@ The three trailing lines are all in the `type` column — all other columns on t
 |---|---|
 | `#DXF-CSV v1.0` | Format identifier and version |
 | `audience:ai` | Terse encoding is intentional — written for machine consumption |
-| `source:filename.dwg sha1:abc123def456` | Source drawing filename and 12-char SHA-1 content hash. Filename is unquoted when it contains no spaces. A filename containing a space is single-quoted: `source:'my file.dwg'`. A literal single quote in the filename is doubled: `source:'rich''s file.dwg'`. |
+| `source:filename.dwg sha1:abc123def456` | Source drawing filename and 12-char SHA-1 content hash. Filename is unquoted when it contains no spaces. A filename containing a space is single-quoted: `source:'my file.dwg'`. A literal single quote in the filename is doubled: `source:'rich''s file.dwg'`. `source:` should always name a `.dwg` file — it describes the origin drawing, not the CSV. For AI-generated content with no source drawing use `source:generated.dwg` paired with the appropriate sha1 sentinel. |
 | `codes:dxf-r12` or `codes:dxf-2018` | DXF version of the source export. `dxf-r12` = AutoCAD Release 12 entity set. `dxf-2018` = AutoCAD 2018 format. Future versions follow the same pattern |
 | `dxfcsv:'https://drawingsync.com/dxfcsv/v1.0/spec.md'` | This document |
 | `last-updated:2026-04-10` | Build date of the CSVOUT binary that produced this file — set at compile time |
@@ -189,6 +189,12 @@ Note that even native AutoCAD entities can be zombies. WIPEOUT, for example, app
 
 In both modes the CSV carries geometry and drafting intent; bookkeeping is never round-tripped.
 
+**Derived counts are absent:** Counts that are fully redundant with their data columns are omitted from the CSV. CSVIN derives them by counting fields — the count column would add no information. This applies to:
+- SPLINE: `int[72]` (knot count derived from `real[40]`), `int[73]` (control point count from `pt[10]`), `int[74]` (fit point count from `pt[11]`)
+- MESH: `int[92]` (vertex count from `pt[10]`), `int[95]` (crease count, always equal to `int[94]`)
+
+AI generators must not emit these columns. A consumer reading a DXF-CSV file should not expect them. This is a design rule, not a per-entity exception.
+
 **sha1 as drawing state contract:** The `sha1:` clause is not just documentation — it is a contract between the CSV and the drawing state. CSVIN verifies the hash before importing; if the open drawing doesn't match, import is rejected. This mechanism supports a library of known starting points. An AI generating content for `sha1:396cb2c5a30e` (empty AutoCAD 2018 template) makes no assumptions about pre-existing blocks, layers, or styles — it must define everything it uses. An AI generating content for a domain-specific template sha1 can reference blocks, layers, dimstyles, and text styles that already exist in that drawing without redefining them, keeping the generated CSV lean and focused on design intent rather than infrastructure. The sha1 is the key; the drawing is the state.
 
 **Open library:** Anyone can define a template drawing, publish it, and document its sha1. No central registry or approval is required — if the sha1 matches the open drawing, CSVIN imports cleanly and the expectations encoded in that template are guaranteed. Domain communities can maintain their own templates: architectural (standard layer names, door and window blocks, annotation styles), electrical (symbol libraries, IEC or NFPA layer conventions), civil (survey layers, coordinate systems), mechanical (ASME title blocks, GD&T styles). An AI targeting a known template sha1 can skip all table definitions and generate only entities — the smallest possible CSV for the most complete result.
@@ -247,18 +253,18 @@ Headers follow the pattern `semanticname[code]` where `code` is the DXF group co
 | `layer[8]` | 8 | Layer name. Present on all geometry entities |
 | `pt[10]` | 10 | Primary point. Single `x,y` or `x,y,z` for most entities. Space-delimited vertex list for LWPOLYLINE |
 | `pt[11]` | 11 | Second point — LINE end, 3DFACE corner 2, TEXT alignment point, DIMENSION pt 2 |
-| `pt[12]` | 12 | Third point — 3DFACE/SOLID corner 3 |
-| `pt[13]` | 13 | Fourth point — 3DFACE/SOLID corner 4, DIMENSION pt 4 |
+| `pt[12]` | 12 | Third point — 3DFACE/SOLID corner 3. On SPLINE: start tangent vector (independently optional) |
+| `pt[13]` | 13 | Fourth point — 3DFACE/SOLID corner 4, DIMENSION pt 4. On SPLINE: end tangent vector (independently optional) |
 | `pt[14]` | 14 | Fifth point — DIMENSION pt 5 (first extension line start) |
 | `pt[15]` | 15 | Fifth point — entity-scoped. Absent when no entity in the export uses this code |
 | `pt[16]` | 16 | Sixth point — entity-scoped. Absent when no entity in the export uses this code |
 | `pt[17]` | 17 | Seventh point — entity-scoped. Absent when no entity in the export uses this code |
 | `elev[38]` | 38 | Elevation — Z offset for flat entities (LWPOLYLINE, etc.). Absent = 0 |
 | `thick[39]` | 39 | Extrusion thickness — Z depth. Absent = 0 |
-| `real[40]` | 40 | Floating scalar — radius (CIRCLE/ARC), text height (TEXT), start width (POLYLINE) |
-| `real[41]` | 41 | Floating scalar — x-scale (INSERT), end width (POLYLINE), text width factor (TEXT) |
-| `real[42]` | 42 | Floating scalar — bulge (VERTEX/LWPOLYLINE), y-scale (INSERT) |
-| `real[43]` | 43 | Floating scalar — z-scale (INSERT), constant width (LWPOLYLINE) |
+| `real[40]` | 40 | Floating scalar — radius (CIRCLE/ARC), text height (TEXT/MTEXT), start width (POLYLINE), overall scale (MLINE) |
+| `real[41]` | 41 | Floating scalar — x-scale (INSERT), end width (POLYLINE), text width factor (TEXT). On MTEXT: defined width (reference rectangle width, 0=undefined). On MLINE: element parameters comma-delimited |
+| `real[42]` | 42 | Floating scalar — bulge (VERTEX/LWPOLYLINE), y-scale (INSERT). On MTEXT: actual height (AutoCAD-computed, read-only) |
+| `real[43]` | 43 | Floating scalar — z-scale (INSERT), constant width (LWPOLYLINE). On MTEXT: actual width (AutoCAD-computed, read-only) |
 | `angle[50]` | 50 | Angle in degrees — start angle (ARC), rotation (INSERT/TEXT), POINT display angle |
 | `angle[51]` | 51 | Angle in degrees — end angle (ARC), oblique angle (TEXT) |
 | `angle[53]` | 53 | Angle in degrees — entity-scoped. On HATCH: hatch pattern angle |
@@ -269,31 +275,33 @@ Headers follow the pattern `semanticname[code]` where `code` is the DXF group co
 | `paper[67]` | 67 | Paper-space flag. Always 1 when present. Emitted on all paper-space entities including VIEWPORTs. |
 | `int[68]` | 68 | VIEWPORT status flags |
 | `int[69]` | 69 | VIEWPORT ID |
-| `int[70]` | 70 | Integer flags — entity-scoped. LAYER: frozen/locked bits. LWPOLYLINE: 1=closed (absent or 0=open). POLYLINE: see mesh flags. VERTEX: see vertex flags. BLOCK: block type flags |
-| `int[71]` | 71 | Integer — POLYLINE mesh M vertex count, TEXT generation flags |
-| `int[72]` | 72 | Integer — POLYLINE mesh N vertex count, TEXT/ATTRIB horizontal justification |
-| `int[73]` | 73 | Integer — TEXT vertical justification (0=baseline 1=bottom 2=middle 3=top) |
-| `int[74]` | 74 | Integer — ATTDEF/ATTRIB vertical justification |
-| `real[44]` | 44 | Floating scalar — entity-scoped. On MINSERT: column spacing. On SPLINE: fit tolerance |
-| `real[45]` | 45 | Floating scalar — entity-scoped. On MINSERT: row spacing. On HATCH: pattern line offset X component. On MTEXT: defined height (0=variable) |
-| `real[46]`–`real[48]` | 46–48 | Floating scalar — entity-scoped. On HATCH: `real[46]` = pattern line offset Y component. On DIMSTYLE rows: dimension variables |
+| `int[70]` | 70 | Integer flags — entity-scoped. LAYER: frozen/locked bits. LWPOLYLINE: 1=closed (absent or 0=open). POLYLINE: see mesh flags. VERTEX: see vertex flags. BLOCK: block type flags. MLINE: bit 0=closed, bit 1=suppress start caps, bit 2=suppress end caps |
+| `int[71]` | 71 | Integer — POLYLINE mesh M vertex count, TEXT generation flags. On MTEXT: attachment point (1=TL, 2=TC, 3=TR, 4=ML, 5=MC, 6=MR, 7=BL, 8=BC, 9=BR) |
+| `int[72]` | 72 | Integer — POLYLINE mesh N vertex count, TEXT/ATTRIB horizontal justification. On MTEXT: drawing direction (1=left-to-right, 3=top-to-bottom, 5=by style) |
+| `int[73]` | 73 | Integer — TEXT vertical justification (0=baseline 1=bottom 2=middle 3=top). On MTEXT: line spacing style (1=at least, 2=exactly) |
+| `int[74]` | 74 | Integer — ATTDEF/ATTRIB vertical justification. On MLINE: per-element parameter counts comma-delimited (absent when all elements have 2 parameters) |
+| `real[44]` | 44 | Floating scalar — entity-scoped. On MINSERT: column spacing. On SPLINE: fit tolerance. On MTEXT: line spacing factor (1.0=single, absent=not set) |
+| `real[45]` | 45 | Floating scalar — entity-scoped. On MINSERT: row spacing. On HATCH: pattern line offset X component. On MTEXT: background fill scale factor (~1.0–3.0, 1.5 typical) — only present as part of the background fill tail, see `long[90]` |
+| `real[46]`–`real[48]` | 46–48 | Floating scalar — entity-scoped. On HATCH: `real[46]` = pattern line offset Y component. On MTEXT: `real[46]` = defined column height (legacy field, 0/absent when not used). On DIMSTYLE rows: dimension variables |
+| `real[48]` | 48 | Linetype scale — entity-level override of the global LTSCALE. Absent = use global scale |
 | `real[49]` | 49 | LTYPE element data — comma-delimited list of dash/dot/gap lengths for non-CONTINUOUS linetypes. Positive = dash length, negative = gap length, zero = dot |
 | `int[75]`–`int[79]` | 75–79 | Entity-scoped integers. On POLYLINE: `int[75]` = smooth surface type (0=none, 5=quadratic B-spline, 6=cubic B-spline, 8=Bezier). On HATCH: `int[75]`=pattern type, `int[76]`=associativity, `int[77]`=hatch style (0=normal, 1=outer, 2=ignore), `int[78]`=pattern line count, `int[79]`=pixel size. On DIMSTYLE rows: dimension style variables |
-| `real[141]` | 141 | Entity-scoped. On ACAD_TABLE: column widths comma-delimited |
-| `real[142]` | 142 | Entity-scoped. On ACAD_TABLE: row heights comma-delimited |
-| `real[140]`–`real[147]` | 140–147 | DIMSTYLE floating-point variables (extended range) — entity-scoped, only on DIMSTYLE rows |
+| `real[141]` | 141 | Floating scalar — entity-scoped. On ACAD_TABLE: row heights comma-delimited. On DIMSTYLE: `real[141]`–`real[147]` dimension variables |
 | `int[170]`–`int[178]` | 170–178 | DIMSTYLE integer variables (extended range) — entity-scoped, only on DIMSTYLE rows |
 | `text[4]` | 4 | String value — entity-scoped. Absent when no entity in the export uses this code |
 | `variable[9]` | 9 | String value — entity-scoped. Absent when no entity in the export uses this code |
 | `ext[210]` | 210 | OCS extrusion normal vector — `x,y,z`. Absent = default `0,0,1` (WCS). Applies to SOLID, CIRCLE, INSERT, and other entities in a non-WCS plane |
-| `long[90]` | 90 | Long integer — entity-scoped. On MESH: subdivision level |
-| `long[93]` | 93 | Long integer — entity-scoped. On MESH: face count |
-| `long[94]` | 94 | Long integer — entity-scoped. On MESH: edge count |
+| `long[90]` | 90 | Long integer — entity-scoped. On MESH: combined face and edge data (see MESH entity). On MTEXT: background fill flag — triggers a trailing fill tail (`int[63]` fill color, `real[45]` fill scale factor) when set to 1, 3, 16, or 17. When set to 2 (use drawing background color), only `long[90]` itself is present — the fill tail is rejected by `entmake` in that case and must not be emitted. Absent or 0 = no background fill |
+| `long[91]` | 91 | Long integer — entity-scoped. On MESH: subdivision level (absent when 0) |
+| `long[93]` | 93 | Long integer — entity-scoped. On MESH: face data count |
+| `long[94]` | 94 | Long integer — entity-scoped. On MESH: crease edge count |
+| `real[140]` | 140 | Floating scalar — entity-scoped. On MESH: crease values comma-delimited, one per edge (`int[94]` values). Absent when all creases are 0.0 (flat mesh). On DIMSTYLE: `real[140]`–`real[147]` are floating-point dimension variables |
 | `int[63]` | 63 | Entity-scoped. On HATCH: fill color override (background color), comma-delimited when multiple loops have different fill colors |
 | `real[47]` | 47 | Entity-scoped. On HATCH: pattern line minimum dash length (pixel size). Suppressed when equal to default — this is a display hint, not geometry |
 | `char[271]` | 271 | Single-byte integer — entity-scoped. On DIMSTYLE: DIMDEC (decimal places for primary units) |
 | `char[272]` | 272 | Single-byte integer — entity-scoped. On DIMSTYLE: DIMTDEC (decimal places for tolerance) |
-| `char[280]`–`char[289]` | 280–289 | Single-byte integers (0–255, RTCHAR). Entity-scoped. On PDFUNDERLAY: `char[281]`=contrast (0–100), `char[282]`=fade (0–80). On DIMSTYLE: various boolean-like flags |
+| `char[280]`–`char[289]` | 280–289 | Single-byte integers (0–255, RTCHAR). Entity-scoped. On PDFUNDERLAY: `char[281]`=contrast (0–100), `char[282]`=fade (0–80). On HELIX: `char[280]`=handedness (0=left, 1=right). On DIMSTYLE: various boolean-like flags |
+| `long[421]` | 421 | Long integer — entity-scoped. On HATCH gradient: packed 24-bit RGB color(s) comma-delimited (one per gradient color entry). Same bit layout as `long[420]`: `(R << 16) | (G << 8) | B`. Present only on gradient fill hatches |
 
 **DIMSTYLE group code range:** DIMSTYLE rows use a wide and evolving range of group codes across `real`, `int`, `char`, and `pt` prefixes. The codes listed above cover the most common variables but AutoCAD adds dimension variables with each release. A DIMSTYLE row may contain additional valid codes (e.g. `char[277]` DIMUNIT, `char[280]` per-object linetype flag, `pt[213]` leader direction vector) not individually documented here. All are valid — read the column header and treat any unknown DIMSTYLE code as a dimension variable to preserve round-trip.
 
@@ -516,7 +524,7 @@ Negative ACI in the LAYER table means the layer is frozen or off. Use `abs(value
 | `ARC` | `pt[10]` center, `real[40]` radius, `angle[50]` start, `angle[51]` end | Angles in degrees CCW from X axis |
 | `POINT` | `pt[10]` location, `angle[50]` display angle | |
 | `TEXT` | `pt[10]` insertion point, `real[40]` height, `text[1]` string, `int[72]` horizontal justification, `int[73]` vertical justification | `pt[10]` is always the insertion point regardless of justification — CSVIN remaps group codes internally. `int[72]`: 0=left (absent), 1=center, 2=right, 3=aligned, 4=middle, 5=fit. `int[73]`: 0=baseline (absent), 1=bottom, 2=middle, 3=top. `pt[11]` alignment point is not emitted. |
-| `MTEXT` | `pt[10]` insertion point, `real[40]` reference rectangle width, `text[1]` content, `int[71]` attachment point, `angle[50]` rotation | `\P` = newline in content. Other inline codes (`\A1;`, `{\H...}`, etc.) preserved as-is. Internal formatting cache fields stripped. |
+| `MTEXT` | `pt[10]` insertion point, `real[40]` text height, `real[41]` defined width (reference rectangle width, 0=undefined/no wrap), `text[1]` content, `int[71]` attachment point, `angle[50]` rotation | `\P` = newline in content. Other inline codes (`\A1;`, `{\H...}`, etc.) preserved as-is. `real[44]` = line spacing factor (1.0=single, absent=default/none set). `real[46]` = defined column height (0=variable/none — legacy XDATA-era field, distinct from any column geometry on the now-stripped embedded object). `int[72]` = drawing direction (1=LR, 3=TB, 5=by style). `int[73]` = line spacing style (1=at least, 2=exactly). `long[90]` = background fill flag (1/3/16/17 = filled, with trailing `int[63]` fill color and `real[45]` fill scale factor; 2 = use drawing background, `long[90]` only — no trailing fields; absent/0 = no fill). `real[45]` is **only** present as part of the fill tail — it is not a general-purpose defined-height field. DXF code 101 (`Embedded Object`) and the codes unique to that block (`pt[11]`, `real[42]`, `real[43]`, `int[70]`, `int[74]`) are stripped — `entmake` does not support them. The remaining shared codes (`pt[10]`, `real[41]`, `real[44]`, `int[71]`, `int[72]`, `int[73]`) are emitted once, flattened — not duplicated for the main entity vs. the stripped embedded object. |
 | `INSERT` | `pt[10]` position, `name[2]` block name, `real[41/42/43]` scale, `angle[50]` rotation | Absent scale = 1.0. If no matching BLOCK definition exists, the block was stripped — treat as zero-geometry insertion |
 | `MINSERT` | same as INSERT plus `real[44]` column spacing, `real[45]` row spacing, `int[70]` column count, `int[71]` row count | Rectangular array of block insertions. Exported as INSERT type with additional codes — distinguish by presence of `real[44]`/`real[45]` |
 | `ATTRIB` | follows INSERT, `name[2]` tag, `text[1]` value | Always same space (model or paper) as parent INSERT |
@@ -524,18 +532,19 @@ Negative ACI in the LAYER table means the layer is frozen or off. Use `abs(value
 | `3DFACE` | `pt[10]`-`pt[13]` four corners | `int[70]` = edge visibility bitmask (bit N hides edge N) |
 | `SOLID` | `pt[10]`-`pt[13]` four corners | Note: pt[12] and pt[13] are swapped vs 3DFACE in DXF spec |
 | `TRACE` | `pt[10]`-`pt[13]` four corners | Same geometry as SOLID, legacy entity |
-| `POLYLINE` | `pt[10]` elevation only (X and Y always zero), followed by VERTEX rows, terminated by SEQEND | `int[70]` flags: 1=closed-M, 2=curve-fit, 4=spline-fit, 8=3D, 16=polygon-mesh, 32=closed-N, 64=closed-N (polygon mesh). Flags combine — `int[70]=17` is polygon-mesh + closed-M. `seq[66]=1` always present. `real[40]` default start width, `real[41]` default end width — absent when zero. `int[75]` smooth surface type: 0=none, 5=quadratic B-spline, 6=cubic B-spline, 8=Bezier. **Polygon mesh:** when `int[70]` has bit 16 set, `int[71]`=M vertex count and `int[72]`=N vertex count are required — these define the mesh dimensions and must be present in both CSVOUT output and CSVIN input. `ads_entmake` may accept a mesh POLYLINE without them but DXF export will fail without correct M×N values. |
-| `POLYLINE` | `pt[10]` elevation only (X and Y always zero), followed by VERTEX rows, terminated by SEQEND | `int[70]` flags: 1=closed-M, 2=curve-fit, 4=spline-fit, 8=3D, 16=polygon-mesh, 32=closed-N, 64=closed-N (polygon mesh). Flags combine — `int[70]=17` is polygon-mesh + closed-M. `seq[66]=1` always present. `real[40]` default start width, `real[41]` default end width — absent when zero. `int[75]` smooth surface type: 0=none, 5=quadratic B-spline, 6=cubic B-spline, 8=Bezier. `int[70]=128` (continuous linetype pattern) applies to 2D polylines only — ignored on 3D polylines (`int[70]=8`). **Polygon mesh:** when `int[70]` has bit 16 set, `int[71]`=M vertex count and `int[72]`=N vertex count are required — these define the mesh dimensions and must be present in both CSVOUT output and CSVIN input. `ads_entmake` may accept a mesh POLYLINE without them but DXF export will fail without correct M×N values. |
+| `POLYLINE` | `pt[10]` elevation only (X and Y always zero), followed by VERTEX rows, terminated by SEQEND | `int[70]` flags: 1=closed-M, 2=curve-fit, 4=spline-fit, 8=3D, 16=polygon-mesh, 32=closed-N, 64=closed-N (polygon mesh). Flags combine — `int[70]=17` is polygon-mesh + closed-M. `int[70]=128` (continuous linetype pattern) applies to 2D polylines only — ignored on 3D polylines (`int[70]=8`). `seq[66]=1` always present. `real[40]` default start width, `real[41]` default end width — absent when zero. `int[75]` smooth surface type: 0=none, 5=quadratic B-spline, 6=cubic B-spline, 8=Bezier. **Polygon mesh:** when `int[70]` has bit 16 set, `int[71]`=M vertex count and `int[72]`=N vertex count are required — must be present for DXF export. See sample_polylines.csv. |
 | `VERTEX` | `pt[10]` coordinate, `real[40]` start width, `real[41]` end width, `real[42]` bulge | `int[70]` vertex flags: 1=curve-fit generated vertex, 2=tangent defined (`angle[50]` carries tangent direction), 8=spline frame control point, 16=spline fit point, 18=spline fit point with tangent (16+2 — used for spline-fit insert/anchor vertex), 32=3D polyline vertex OR 3D polygon mesh vertex, 64=polygon mesh vertex closed-N, 128=face index vertex (`int[71/72/73]` are vertex indices). **Note:** `int[70]=4` on a VERTEX is not valid DXF — never emit it. `real[40]`/`real[41]` absent when they match the POLYLINE default widths. **Curve-fit POLYLINEs (`int[70]=2` on POLYLINE):** CSVOUT strictly interleaves original control vertices (int[70]=2, with `angle[50]` tangent) and generated curve-fit vertices (int[70]=1, with `real[42]` bulge). Last original vertex has no bulge. For AI generation, emit only the original control vertices (int[70]=2) — AutoCAD regenerates the fit. **Spline-fit POLYLINEs (`int[70]=4` on POLYLINE, `int[75]=6` for cubic):** vertex order is strict: (1) insert/anchor vertex (int[70]=18, coordinates of first fit point, carries `angle[50]` tangent), (2) all generated B-spline control vertices (int[70]=8), (3) all fit-point vertices (int[70]=16). For AI generation use SPLINESEGS=2: for N fit points generate `2×(N-1)+1` control points (int[70]=8), followed by N fit points (int[70]=16). Example for 5 fit points: `insert(18) → ctrl×9(8) → fit×5(16) → SEQEND`. See `sample_polylines.csv` for complete verified examples of all POLYLINE/VERTEX flag combinations. |
 | `LWPOLYLINE` | `pt[10]` all vertices space-delimited, `real[42]` bulge values comma-delimited | Post-R12, treated as R12-extended. `elev[38]` = elevation when non-zero. `thick[39]` = thickness when non-zero. `int[70]` = 1 when closed, absent when open |
+| `MESH` | `pt[10]` vertices space-delimited, `long[90]` face and edge data, `long[93]` face data count, `long[94]` crease edge count, `real[140]` crease values comma-delimited | Subdivision mesh (post-2010). `long[91]` = subdivision level (absent when 0). `long[90]` contains two sections combined: face section (`long[93]` values — face vertex counts followed by vertex indices) then edge section (`long[94]×2` values — vertex index pairs per crease edge). Total `long[90]` field count = `long[93]` + `long[94]×2`. A fixed `(90 . 0)` sentinel is always appended by CSVIN after the edge section — it is not a CSV value. `int[92]` (vertex count) and `int[95]` (crease count, always equal to `int[94]`) are **absent from the CSV** — derived by CSVIN from `pt[10]` field count and `long[94]` respectively. `real[140]` absent when all creases are 0.0 — omit for flat meshes. When present, field count must equal `long[94]`. |
+| `MLINE` | `name[2]` style name, `pt[10]` start point, `pt[11]` vertex coordinates space-delimited, `pt[12]` segment direction unit vectors space-delimited, `pt[13]` miter direction unit vectors space-delimited, `real[40]` overall scale, `real[41]` element parameters comma-delimited | Multiline entity — parallel lines drawn along a path using an MLINESTYLE definition. `name[2]` = MLINESTYLE name (style geometry is embedded in the export rather than referencing external style data). `pt[10]` = origin/start point (DXF code 10, always equals first point in `pt[11]`). `pt[11]` = all vertices of the path, space-delimited (DXF code 11, one per vertex). `pt[12]` = segment direction unit vectors, space-delimited, one per vertex (DXF code 12). `pt[13]` = miter direction unit vectors, space-delimited, one per vertex (DXF code 13). `real[40]` = overall scale factor applied to all element offsets. `real[41]` = element parameter flat list, comma-delimited (DXF code 41). For a 2-element style with N vertices, each vertex contributes 2 × (offset, trailing_gap) parameter groups; for non-uniform element parameter counts see `int[74]`. `int[70]` = flags: bit 0=closed, bit 1=suppress start caps, bit 2=suppress end caps (absent=open with caps). `int[74]` = per-element parameter counts comma-delimited (DXF code 74) — absent when all elements have exactly 2 parameters each at all vertices. Not supported by CSVIN. |
 | `SEQEND` | terminates POLYLINE/INSERT+ATTRIB sequence | No properties — type column only |
-| `DIMENSION` | `pt[10]` dim line, `pt[11]` text midpoint, `pt[13]` definition pt 4, `pt[14]` definition pt 5, `text[3]` dimstyle name | `name[2]` references a `*D##` block — anonymous blocks are stripped by default, no matching BLOCK definition will be present. See Block strip rules. |
-| `SPLINE` | `pt[10]` control points space-delimited, `pt[11]` fit points space-delimited, `real[40]` knot vector comma-delimited, `real[42]` knot tolerance, `real[43]` control point tolerance, `real[44]` fit tolerance, `int[70]` flags | `int[70]` flags: 1=closed, 2=periodic, 4=rational, 8=planar, 16=linear. All data packed inline — no continuation rows. `int[71]` degree, `int[72]` knot count, `int[73]` control point count, `int[74]` fit point count are present in CSVOUT output but derived from the data — not required for CSVIN import. |
+| `DIMENSION` | `pt[10]` dim line point, `pt[11]` text midpoint, `pt[13]` definition pt 1, `pt[14]` definition pt 2, `pt[15]` definition pt 3 (arc/angular), `pt[16]` arc point (angular), `real[40]` leader length (certain types), `real[144]` actual measurement value (derived, read-only), `text[3]` dimstyle name, `angle[50]` rotation angle | `int[70]` low 4 bits = dimension type: 0=linear-rotated, 1=aligned, 2=angular, 3=diameter, 4=radius, 5=angular-3pt, 6=ordinate. Bit 32 = unique block reference — always set in practice; default value of `int[70]` when absent is 32. Bit 64 = ordinate type. Bit 128 = text user-positioned. Common values: 32=linear, 33=aligned, 34=angular, 35=radius, 36=ordinate, 37=angular-3pt. `name[2]` references a `*D##` anonymous block — stripped by default, no matching BLOCK definition will be present. `char[271]`/`char[272]` may appear as per-entity style overrides (decimal places). `real[144]` is the AutoCAD-computed measurement — present but not required for CSVIN import. See Block strip rules. |
+| `SPLINE` | `pt[10]` control points space-delimited, `pt[11]` fit points space-delimited, `pt[12]` start tangent vector (optional), `pt[13]` end tangent vector (optional), `real[40]` knot vector comma-delimited, `real[41]` weights comma-delimited (rational splines only), `real[42]` knot tolerance, `real[43]` control point tolerance, `real[44]` fit tolerance (present only when fit points exist) | `int[70]` flags (bits 0–4 only — upper bits stripped by CSVOUT): 1=closed, 2=periodic, 4=rational, 8=planar, 16=linear. AI generators should only set bits 0–4. `int[71]` = degree. `int[72]` (knot count), `int[73]` (control point count), `int[74]` (fit point count) are **absent from the CSV** — they are derived by CSVIN from field counts of `real[40]`, `pt[10]`, `pt[11]` respectively. Do not emit them. `pt[12]` and `pt[13]` are **independently optional** — either may be present without the other, and both are absent in the column header unless at least one spline in the drawing has that tangent. `real[44]` present only when `int[74] > 0`. All data packed inline — no continuation rows. |
 | `ELLIPSE` | `pt[10]` center, `pt[11]` major axis vector, `real[40]` minor/major axis ratio, `real[42]` end parametric angle | End angle in radians: 2π = full ellipse. `pt[11]` magnitude = major axis length, direction = major axis orientation. `real[40]` is the ratio of minor to major axis (0 to 1), not an absolute length. |
-| `HATCH` | `name[2]` pattern name, `pt[10]` boundary loop vertices (space-delimited `x,y` pairs per loop, loops separated by `0.0,0.0,0.0` sentinel), `pt[11]` spline control points for curved boundary edges, `real[40]` circle boundary radius (comma-delimited when multiple circle boundaries), `real[41]` pattern scale, `real[42]` boundary edge bulge values (comma-delimited), `real[43]` pattern line X origins (comma-delimited per line), `real[44]` pattern line Y origins, `real[45]` pattern line delta-X, `real[46]` pattern line delta-Y, `real[49]` dash/gap lengths per pattern line (comma-delimited), `angle[50]` circle boundary start angle (comma-delimited when multiple circles), `angle[51]` circle boundary end angle — 360=full circle (comma-delimited when multiple circles), `angle[52]` overall hatch rotation in degrees, `angle[53]` per-pattern-line angles (comma-delimited), `int[70]` associativity (1=associative), `int[71]` dual/double hatch flag, `int[72]` boundary edge types per edge (comma-delimited: 1=line, 2=arc/circle, 3=ellipse, 4=spline), `int[73]` complete circle flag (1=full circle when `int[72]=2`), `int[75]` hatch style (0=normal, 1=outer, 2=ignore), `int[76]` pattern type (0=user-defined, 1=predefined, 2=custom), `int[77]` island detection style, `int[78]` number of pattern lines, `int[79]` boundary loop edge type flags (comma-delimited), `long[91]` number of boundary loops, `long[92]` loop type flags (comma-delimited per loop), `long[93]` edge count per loop (comma-delimited), `long[98]` source boundary object count (absent when not associative), `trans[440]` transparency, `long[450]`–`long[453]` gradient fill data, `real[460]`–`real[462]` gradient angles/shift | `name[2]` is the pattern name — `ANSI31`, `SOLID`, `BRICK`, `_USER`, `_U` (user-defined short form), `FP_*` (custom floor plan patterns), or other named patterns. For `SOLID` fill: `int[76]=1`, no pattern line data. Circle boundaries: `int[72]=2`, `real[40]`=radius, `angle[50]`=start, `angle[51]`=end (360=full circle), `int[73]=1` — when multiple circle boundaries exist, `real[40]`, `angle[50]`, and `angle[51]` are all comma-delimited. `angle[52]` is the overall hatch rotation and may be any value. Multiple boundary loops separated by `0.0,0.0,0.0` sentinel in `pt[10]`. All comma-delimited fields are parallel arrays indexed by pattern line or boundary edge. |
+| `HATCH` | `name[2]` pattern name, `pt[10]` boundary loop vertices (space-delimited `x,y` pairs per loop, loops separated by `0.0,0.0,0.0` sentinel), `pt[11]` spline control points for curved boundary edges, `real[40]` circle boundary radius (comma-delimited when multiple circle boundaries), `real[41]` pattern scale, `real[42]` boundary edge bulge values (comma-delimited), `real[43]` pattern line X origins (comma-delimited per line), `real[44]` pattern line Y origins, `real[45]` pattern line delta-X, `real[46]` pattern line delta-Y, `real[49]` dash/gap lengths per pattern line (comma-delimited), `angle[50]` circle boundary start angle (comma-delimited when multiple circles), `angle[51]` circle boundary end angle — 360=full circle (comma-delimited when multiple circles), `angle[52]` overall hatch rotation in degrees, `angle[53]` per-pattern-line angles (comma-delimited), `int[70]` associativity (1=associative), `int[71]` dual/double hatch flag, `int[72]` boundary edge types per edge (comma-delimited: 1=line, 2=arc/circle, 3=ellipse, 4=spline), `int[73]` complete circle flag (1=full circle when `int[72]=2`), `int[75]` hatch style (0=normal, 1=outer, 2=ignore), `int[76]` pattern type (0=user-defined, 1=predefined, 2=custom), `int[77]` island detection style, `int[78]` number of pattern lines, `int[79]` boundary loop edge type flags (comma-delimited), `long[91]` number of boundary loops, `long[92]` loop type flags (comma-delimited per loop), `long[93]` edge count per loop (comma-delimited), `long[98]` source boundary object count (absent when not associative), `trans[440]` transparency, `long[450]`–`long[453]` gradient fill data, `real[460]`–`real[462]` gradient angles/shift | `name[2]` is the pattern name — `ANSI31`, `SOLID`, `BRICK`, `_USER`, `_U` (user-defined short form), `FP_*` (custom floor plan patterns), or other named patterns. For `SOLID` fill: `int[76]=1`, no pattern line data. Circle boundaries: `int[72]=2`, `real[40]`=radius, `angle[50]`=start, `angle[51]`=end (360=full circle), `int[73]=1` — when multiple circle boundaries exist, `real[40]`, `angle[50]`, and `angle[51]` are all comma-delimited. `angle[52]` is the overall hatch rotation and may be any value. Multiple boundary loops separated by `0.0,0.0,0.0` sentinel in `pt[10]`. All comma-delimited fields are parallel arrays indexed by pattern line or boundary edge. **Gradient fill:** when `long[450]=1`, the hatch is a gradient fill. `long[452]` = 1 for one-color gradient, 2 for two-color. `long[453]` = number of gradient color entries. `long[421]` = packed RGB color(s) for gradient (comma-delimited when multiple). `real[462]` = shade/tint factor (0.0–1.0). `real[463]` = gradient taper values comma-delimited (one per color). `string[470]` = gradient type name (`LINEAR`, `HEMISPHERICAL`, `CURVED`, `INVLIN`, `INVSPH`, `INVCUR`, `SPHER`, `HEMI`, `CURV`). |
 | `RAY` | `pt[10]` origin, `pt[11]` unit direction vector | Extends infinitely in one direction from origin |
 | `XLINE` | `pt[10]` point on line, `pt[11]` unit direction vector | Extends infinitely in both directions (construction line) |
-| `LEADER` | `pt[10]` vertices space-delimited, `real[40]` arrowhead height, `real[41]` annotation width, `text[3]` dimstyle name, `int[73]` annotation type | `int[73]`: 0=none/MTEXT follows, 1=tolerance, 2=block reference |
+| `LEADER` | `pt[10]` vertices space-delimited, `real[40]` arrowhead height, `real[41]` annotation width, `text[3]` dimstyle name, `int[73]` annotation type | `int[73]`: 0=none/MTEXT follows, 1=tolerance, 2=block reference. `pt[213]` = normal vector override — present when the leader is not in the WCS XY plane |
 | `TOLERANCE` | `pt[10]` insertion point, `text[1]` tolerance string, `text[3]` dimstyle name | Tolerance string uses `%%v` control codes for geometric tolerance symbols and `^J` as line separator |
 | `ACAD_TABLE` | `pt[10]` insertion point, `pt[11]` direction vector, `name[2]` anonymous block reference, `text[1]` cell content, `real[141]` column widths comma-delimited, `real[142]` row heights comma-delimited | Cell content is tab-delimited. Tabs are used when a group code can repeat and values may contain commas or spaces. Per-cell formatting integers stripped. |
 | `MULTILEADER` | `pt[10]` leader line vertices space-delimited, `pt[11]` normal and dogleg direction vectors, `pt[12]` text attachment point, `pt[13]` text direction | Style and override columns stripped — only geometry retained. Content text is not recoverable from the CSV alone; refer to the source DWG. |
@@ -582,7 +591,7 @@ TEXT is supported for short directives. MTEXT is preferred — it allows longer 
 **Required columns:** Always include `name[2]` in the header. Every DXF-CSV file contains SECTION, LAYER, and LTYPE rows — all require `name[2]`. A file missing `name[2]` from the header will have nameless structural rows and will fail to import.
 
 **Column role disambiguation — never interchange these three:**
-- `text[1]` carries the display string for TEXT and MTEXT entities only. It has no meaning on any other row type.
+- `text[1]` carries the display string for TEXT and MTEXT entities, the value for ATTRIB entities, and override text for DIMENSION entities. It has no meaning on any other row type.
 - `name[2]` carries the symbolic name for table entries (LAYER, LTYPE, STYLE, DIMSTYLE, SECTION) and for INSERT block references and HATCH pattern references. It is never a display string and never a layer assignment.
 - `layer[8]` carries the layer assignment for all geometry entities. It is always a layer name string. It is never a display string and never a symbolic name for anything other than the layer the entity lives on.
 
@@ -608,6 +617,8 @@ Three reference files are published alongside this spec at `https://drawingsync.
 
 **`sample_polylines.csv`** — `https://drawingsync.com/dxfcsv/v1.0/sample_polylines.csv` — verified CSVOUT output covering all POLYLINE/VERTEX flag combinations not present in typical drawings: real-world 20×7 polygon mesh (`int[70]=17`, `int[71]=20`, `int[72]=7`), closed-M/N mesh (`int[70]=48`), polyface mesh (`int[70]=64`), 3D polyline (`int[70]=8`) with `int[70]=32` vertices, spline-fit (`int[70]=4`) with correct insert(18)→ctrl(8)→fit(16) ordering, and curve-fit (`int[70]=2`) with interleaved tangent vertices. Five `_ai` layer notes cover: vertex ordering rules, PLINETYPE/LWPOLYLINE conversion, M×N vertex count requirement, int[70]=128 flag collision between POLYLINE and LWPOLYLINE, and guidance to prefer LWPOLYLINE for simple 2D work. Use as the reference for any POLYLINE generation — these sequences are not easy to produce correctly from the spec alone.
 
+**`sample_mtext.csv`** — `https://drawingsync.com/dxfcsv/v1.0/sample_mtext.csv` — a complete periodic table of the elements, built almost entirely from multi-line MTEXT cells. Demonstrates background fill (`long[90]`, `int[63]`, `real[45]`), defined column height (`real[46]`), tightened line spacing (`real[44]=0.35`) for fitting three-line content in a fixed-height cell, middle-center attachment (`int[71]=5`), and `\W` width-factor scaling for long element names that would otherwise overflow a narrow cell. Five `_ai` layer TEXT notes cover: the `long[90]` fill-tail structural exception (value 2 vs. 1/3/16/17, see the `real[45]` finding in the 2026-06-19 changelog entry), the distinction between `^J` soft return (stays inside the current paragraph, responds cleanly to `\H` height scaling) and `\P` paragraph break (governed by AutoCAD's looser paragraph spacing model) — `^J` is what makes a tight fixed-height multi-line cell work, cell geometry conventions (10×10 unit cells, center-point insertion), and the `\W` graceful-compression pattern for overflow text. Use as the reference for any multi-line MTEXT content, background fill, or column-height work — the formatting interactions here are not obvious from the spec alone.
+
 ---
 
 ## DXF-CSV v2018
@@ -626,20 +637,29 @@ Rational B-spline curve. All data packed inline on a single row — no continuat
 |---|---|---|
 | `pt[10]` | 10 | Control points — space-delimited `x,y,z` values |
 | `pt[11]` | 11 | Fit points — space-delimited `x,y,z` values (absent if no fit points) |
+| `pt[12]` | 12 | Start tangent vector — optional, independently present or absent |
+| `pt[13]` | 13 | End tangent vector — optional, independently present or absent |
 | `real[40]` | 40 | Knot vector — comma-delimited values |
+| `real[41]` | 41 | Weights — comma-delimited, one per control point (rational splines only, when `int[70]` bit 2 set) |
 | `real[42]` | 42 | Knot tolerance |
 | `real[43]` | 43 | Control point tolerance |
-| `real[44]` | 44 | Fit tolerance |
-| `int[70]` | 70 | Flags: 1=closed, 2=periodic, 4=rational, 8=planar, 16=linear |
-| `int[71]` | 71 | Degree — present in CSVOUT output, derived from data, not required for CSVIN import |
-| `int[72]` | 72 | Number of knots — present in CSVOUT output, derived, not required for CSVIN import |
-| `int[73]` | 73 | Number of control points — present in CSVOUT output, derived, not required for CSVIN import |
-| `int[74]` | 74 | Number of fit points — present in CSVOUT output, derived, not required for CSVIN import |
+| `real[44]` | 44 | Fit tolerance — column absent when no fit points exist |
+| `int[70]` | 70 | Flags (bits 0–4 only — upper bits stripped): 1=closed, 2=periodic, 4=rational, 8=planar, 16=linear. AI generators should only set bits 0–4 |
+| `int[71]` | 71 | Degree |
+| `int[72]` | 72 | **Absent from CSV** — knot count is derived by CSVIN from `real[40]` field count |
+| `int[73]` | 73 | **Absent from CSV** — control point count is derived by CSVIN from `pt[10]` field count |
+| `int[74]` | 74 | **Absent from CSV** — fit point count is derived by CSVIN from `pt[11]` field count |
 
 #### MTEXT
-Multiline text. `pt[10]` = insertion point (single coordinate). `real[40]` = reference rectangle width. `text[1]` = complete content string — `\P` encodes a paragraph/newline break, other inline formatting codes (`\A1;` = alignment, `{\H...}` = height override, etc.) are preserved as-is. `int[71]` = attachment point (1-9, top-left to bottom-right). `angle[50]` = rotation. `style[7]` = text style.
+Multiline text. `pt[10]` = insertion point (single coordinate). `real[40]` = text height (initial text height). `real[41]` = defined width (reference rectangle width for text wrap; 0 = undefined, no wrap). `text[1]` = complete content string — `\P` encodes a paragraph/newline break, other inline formatting codes (`\A1;` = alignment, `{\H...}` = height override, etc.) are preserved as-is. `int[71]` = attachment point (1-9, top-left to bottom-right). `angle[50]` = rotation. `style[7]` = text style.
 
-AutoCAD emits additional internal formatting cache fields on MTEXT (packed scalars, duplicate points, undocumented integer codes). These are stripped on export — `text[1]` is the complete and sufficient content representation.
+Additional codes emitted when present: `real[44]` = line spacing factor (1.0 = single spacing, absent when not set). `real[46]` = defined column height — a legacy field independent of the column-layout embedded object, 0 or absent when not used. `int[72]` = drawing direction (1=left-to-right, 3=top-to-bottom, 5=by style). `int[73]` = line spacing style (1=at least, 2=exactly).
+
+`long[90]` = background fill flag. Values 1, 3, 16, and 17 trigger a trailing fill tail in fixed order: `int[63]` fill color and `real[45]` fill scale factor (~1.0–3.0 typical, 1.5 default — not a height). DXF's underlying entmake sequence also reserves a transparency slot at this position, but AutoCAD has never implemented transparency for MTEXT background fill — that slot is not written and does not appear in the CSV. Value 2 ("use drawing background color") is a structural exception: only `long[90]` itself is present, and the fill tail is rejected by `entmake` if included — a CSVOUT row with `long[90]=2` must never carry `real[45]` or the other tail fields. `long[90]` absent or 0 means no background fill at all. `real[45]` should not be treated as a general defined-height field — it only exists within this fill tail.
+
+MTEXT can carry column layout data two ways in DXF: as a packed XDATA value (`real[46]`, above) or as a DXF code 101 `Embedded Object` block — a second, self-contained set of MTEXT-like group codes (its own `10`, `11`, `40`, `41`, `42`, `43`, `71`, `72`, `44`, `45`, `73`, `74`, `46`) nested after the 101 marker. The embedded object form is not supported by `entmake` and is stripped on export entirely. Codes that exist only inside the embedded object (`pt[11]` as a second point, `real[42]` actual height, `real[43]` actual width, `int[70]` column flow direction, `int[74]` column count) are dropped along with it — these never appear in the CSV. Codes that the main entity and the embedded object both define (`pt[10]`, `real[41]`, `real[44]`, `int[71]`, `int[72]`, `int[73]`) are unaffected — they come from the main entity and continue to be emitted normally as a single value, not duplicated. `real[45]` is **not** in this shared list — on the main entity it only appears inside the background fill tail described above, unlike the other listed codes which are always present once their condition is met.
+
+MTEXT content longer than 250 characters is split across multiple DXF code 3 continuation lines, with the final remainder in code 1. CSVOUT flattens this into two related columns: `text[1]` holds the complete merged content with the code-1 remainder placed **first**, followed by each code-3 chunk in order, tab-separated — this is the opposite of DXF wire order, where code-3 chunks come first and code 1 is the trailing remainder. `text[3]` holds only the code-3 chunks, tab-separated, in DXF order, and is absent when the content fits in a single code-1 value (250 characters or fewer). A consumer reconstructing `entmake` input for content over 250 characters needs `text[3]` to know where the chunk boundaries fall — `text[1]` alone gives the correct content but not the correct node split.
 
 #### ELLIPSE
 Elliptical curve. `pt[10]` = center, `pt[11]` = major axis vector (magnitude = major axis length, direction = major axis orientation), `real[40]` = minor/major axis ratio (0 to 1), `real[42]` = end parametric angle in radians (2π = full ellipse). Start angle is always 0 in the current encoding — a future revision may move to `angle[50]`/`angle[51]` in degrees to align with ARC.
@@ -650,8 +670,17 @@ Multileader annotation. Leader geometry exposed as flat columns — style and ov
 #### HATCH
 Hatch fill entity. `name[2]` = pattern name (e.g. `ANSI31`, `SOLID`, `BRICK`, `_USER`, custom `FP_*` names). Boundary loop vertices are packed space-delimited into `pt[10]`, with `0.0,0.0,0.0` as the sentinel separating loops when multiple loops exist. `real[41]` = pattern scale. `angle[52]` = overall hatch rotation. `angle[53]` = per-pattern-line angles comma-delimited. `real[43]`/`real[44]` = pattern line X/Y origins. `real[45]`/`real[46]` = pattern line delta-X/Y. `real[49]` = dash/gap lengths per pattern line. `int[72]` = boundary edge types per edge comma-delimited (1=line, 2=arc/circle, 3=ellipse, 4=spline). `int[75]` = hatch style (0=normal, 1=outer, 2=ignore). `int[76]` = pattern type (0=user, 1=predefined, 2=custom). `int[78]` = pattern line count. Circle boundaries: `int[72]=2`, `real[40]`=radius, `angle[50]`=start, `angle[51]`=end angle (360=full circle), `int[73]=1`. For SOLID fill: `int[76]=1`, no pattern line data. All comma-delimited fields are parallel arrays indexed by pattern line or boundary edge.
 
+**Gradient fill:** when `long[450]=1`, the hatch is a gradient fill. Additional columns: `long[452]` = 1 for one-color gradient, 2 for two-color. `long[453]` = number of gradient color entries. `long[421]` = packed 24-bit RGB color(s) comma-delimited (one per `long[453]` entry). `real[462]` = shade/tint factor (0.0–1.0, applies to one-color gradient). `real[463]` = gradient taper values comma-delimited (one per color entry). `string[470]` = gradient type name (`LINEAR`, `HEMISPHERICAL`, `CURVED`, `INVLIN`, `INVSPH`, `INVCUR`, `SPHER`, `HEMI`, `CURV`). For gradient hatches the `name[2]` pattern is always `SOLID`.
+
 #### IMAGE, 3DSOLID, LIGHT, EXTRUDEDSURFACE, OLE2FRAME
 These entity types are not supported by CSVIN — `acdbEntMake` / `acdbEntMod` cannot create them, so they will be ignored on import regardless of what data is present. They may still appear in CSVOUT output and carry analysis value (layer, color, position). They frequently appear as zombies since their object enablers are typically not loaded during export, but the CSVIN limitation is independent of zombie status.
+
+#### MLINE
+Multiline entity — parallel lines drawn simultaneously along a path according to an MLINESTYLE definition. MLINESTYLE defines how many parallel lines to draw and their offsets from the path centerline. The style definition itself is not exported — only the style name (`name[2]`) and the computed geometry.
+
+`pt[10]` = origin/start point. `pt[11]` = all path vertices space-delimited (DXF code 11, one `x,y,z` per vertex). `pt[12]` = segment direction unit vectors space-delimited (DXF code 12, one per vertex). `pt[13]` = miter direction unit vectors space-delimited (DXF code 13, one per vertex). `real[40]` = overall scale factor. `real[41]` = element parameter flat list comma-delimited (DXF code 41). `int[70]` = flags (absent=open with caps): bit 0=closed, bit 1=suppress start caps, bit 2=suppress end caps. `int[74]` = per-element parameter counts comma-delimited (DXF code 74) — absent when all elements have exactly 2 parameters at all vertices.
+
+The element parameter list (`real[41]`) encodes the computed geometry for each element at each vertex: for each vertex, for each element, a group of N parameters (where N is given by `int[74]` for that element, defaulting to 2) consisting of (offset, trailing_distance, ...). For a 2-element MLINESTYLE with no linetype dashes, each vertex contributes 4 values (2 elements × 2 params). Not supported by CSVIN.
 
 #### WIPEOUT
 Masking entity — effectively a filled polygon that obscures underlying geometry. Supported by CSVIN. Frequently appears as a zombie when its enabler is not loaded during export.
@@ -661,9 +690,22 @@ Masking entity — effectively a filled polygon that obscures underlying geometr
 | Header | Code | Meaning | Entity |
 |---|---|---|---|
 | `angle[53]` | 53 | Pattern angle in degrees | HATCH |
-| `long[90]` | 90 | Subdivision level | MESH |
-| `long[93]` | 93 | Face count | MESH |
-| `long[94]` | 94 | Edge count | MESH |
+| `long[90]` | 90 | Face and edge data combined — face section then edge section | MESH |
+| `long[91]` | 91 | Subdivision level (absent when 0) | MESH |
+| `long[93]` | 93 | Face data count | MESH |
+| `long[94]` | 94 | Crease edge count | MESH |
+| `real[140]` | 140 | Crease values comma-delimited (absent when all 0.0) | MESH |
+| `real[41]` | 41 | Defined width (reference rectangle width, 0=undefined/no wrap) | MTEXT |
+| `real[44]` | 44 | Line spacing factor (1.0=single, absent=not set) | MTEXT |
+| `real[45]` | 45 | Background fill scale factor (~1.0–3.0, 1.5 typical) — only present within the fill tail, see `long[90]` | MTEXT |
+| `real[46]` | 46 | Defined column height — legacy field, 0/absent when not used | MTEXT |
+| `long[90]` | 90 | Background fill flag (1/3/16/17=filled with trailing tail, 2=drawing background with no tail, absent/0=no fill) | MTEXT |
+| `int[72]` | 72 | Drawing direction (1=LR, 3=TB, 5=by style) | MTEXT |
+| `int[73]` | 73 | Line spacing style (1=at least, 2=exactly) | MTEXT |
+| `long[421]` | 421 | Packed RGB color(s) comma-delimited (one per gradient color entry) | HATCH |
+| `real[463]` | 463 | Gradient taper values comma-delimited (one per color entry) | HATCH |
+| `string[470]` | 470 | Gradient type name | HATCH |
+| `pt[213]` | 213 | Normal vector override | LEADER |
 
 ### Stripped dxf-2018 bookkeeping
 
@@ -686,11 +728,50 @@ New conditional clauses for `codes:dxf-2018` files:
 
 ---
 
+## Workflow decision guide
+
+This section helps an AI reason about which workflow to recommend or generate for, based on the user's situation.
+
+### The two import paths
+
+**AutoCAD session (`CSVIN` command):** The user runs CSVIN inside a live AutoCAD session. `acdbEntMake` / `acdbEntMod` create or update entities directly in the open drawing. AutoCAD's geometry engine is live — computed entity properties are resolved immediately on creation. The target drawing must be open and its sha1 must match the `source:` clause.
+
+**DXF file (`dwgsync.exe -dsm`):** No AutoCAD session required. `dwgsync.exe` merges the CSV into a DXF template file and writes a new `.dxf` or `.dwg`. AutoCAD does not need to be installed for `.dxf` output. The sha1 in the CSV identifies which template to merge into — typically `sha1:781e2fb2654f` (`new.dxf`) for standalone output, or `sha1:396cb2c5a30e` for import into a blank AutoCAD drawing.
+
+**Nudge:** After a `-dsm` DXF import, DIMENSION entities will have their definition points and leader geometry present but their rendered anonymous blocks (`*D##`) absent — these are stripped on export and cannot be regenerated without AutoCAD's dimension engine. The user runs the **Nudge** option of the CSVIN command (or `-nudge` flag of `dwgsync.exe`) to open the DXF in AutoCAD and trigger regeneration. This is the most common post-import step for drawings with dimensions.
+
+### Choosing a sha1 target
+
+| Situation | sha1 target | `-dxs` scope | Notes |
+|---|---|---|---|
+| Generating from scratch, no source drawing | `396cb2c5a30e` (empty AutoCAD 2018 template) | `TABLES,BLOCKS,ENTITIES` | Define all layers, linetypes, styles, and blocks used |
+| Generating for `new.dxf` standalone output | `781e2fb2654f` | `TABLES(LAYER),ENTITIES` | Minimal template — Standard style, layer 0, basic linetypes already present |
+| Adding geometry to an existing drawing | Source drawing sha1 | `ENTITIES` (or `TABLES(LAYER),ENTITIES`) | Layers and blocks already exist in the drawing — reference by name, no need to redefine |
+| Targeting a company or domain template | Company template sha1 | `TABLES(LAYER),ENTITIES` | Company layers, blocks, dimstyles already present — AI can reference them by name without defining them |
+
+### Layer handling
+
+AI performs well managing layers in generative mode. The default export scope `TABLES(LAYER),ENTITIES` reflects this — the LAYER table is always included so the AI has the full layer inventory, while LTYPE, STYLE, DIMSTYLE, and BLOCKS are omitted unless needed. When targeting a company or domain sha1, the AI can reference existing layer names (e.g. `A-WALL`, `E-POWR`, `S-BEAM`) confidently without redefining them — the sha1 contract guarantees those layers exist in the target drawing.
+
+When generating for `sha1:396cb2c5a30e` (blank template), the AI must define every layer it uses. Layer definitions before their first entity use is not required structurally — CSVIN creates missing layers on import — but including them makes the file self-documenting and gives the user visibility into the layer scheme.
+
+### AutoCAD not required
+
+A DXF-CSV file can be converted to a valid `.dxf` without AutoCAD installed:
+
+```
+dwgsync.exe new.dxf -dsm drawing.csv -dxf output.dxf
+```
+
+`new.dxf` is the Drawing Sync minimal DXF template (`sha1:781e2fb2654f`), available at `https://drawingsync.com/dxfcsv/v1.0/new.dxf`. The resulting DXF contains only drafting content — no AutoCAD plot settings bloat. Any DXF-compatible application can open it. A nudge pass in AutoCAD is needed only if the drawing contains DIMENSION entities.
+
+---
+
 ## CSVIN status
 
 CSVIN is the companion import pipeline — reads a DXF-CSV file, matches it against the original DWG via `source:` and `sha1:`, and updates changed entities directly via `acdbEntMake` / `acdbEntMod`. No DXF is generated or consumed during import.
 
-**Not supported for CSVIN:** 3DSOLID, LIGHT, EXTRUDEDSURFACE, OLE2FRAME, IMAGE, VIEW, VIEWPORT, PDFUNDERLAY — these entity types cannot be created or modified via `acdbEntMake` / `acdbEntMod`. This is a permanent limitation, not planned work. CSVIN will ignore rows of these types on import.
+**Not supported for CSVIN:** 3DSOLID, LIGHT, EXTRUDEDSURFACE, OLE2FRAME, IMAGE, VIEW, VIEWPORT, PDFUNDERLAY, MLINE — these entity types cannot be created or modified via `acdbEntMake` / `acdbEntMod`. This is a permanent limitation, not planned work. CSVIN will ignore rows of these types on import.
 
 **Planned for CSVIN:** ACAD_TABLE, MINSERT, MULTILEADER. Paper space entity support (layout import) is planned work.
 
@@ -700,6 +781,9 @@ CSVIN is the companion import pipeline — reads a DXF-CSV file, matches it agai
 
 | Version | Date | Notes |
 |---|---|---|
+| 1.0 | 2026-06-20 | Workflow decision guide added: AutoCAD-session vs `-dsm` DXF-file import paths, nudge requirement for DIMENSION regeneration, sha1 target selection table, layer handling guidance, AutoCAD-not-required path. `sample_mtext.csv` added: a complete periodic table of the elements built from multi-line MTEXT cells, demonstrating background fill, defined column height, tightened line spacing, middle-center attachment, and `\W` width-factor scaling for overflow text, with `_ai` layer notes on the `^J` soft-return vs. `\P` paragraph-break distinction. MLINE new entity fully documented. HATCH, MTEXT, DIMENSION, LEADER documentation updated. |
+| 1.0 | 2026-06-07 | DIMENSION fully documented: `int[70]` type flags decoded (low 4 bits = type, high bits = positioning), `pt[15]`/`pt[16]` for arc/angular dimensions, `real[144]` actual measurement (derived), `real[40]` leader length, `char[271]`/`char[272]` per-entity style overrides. `real[48]` linetype scale added to standard columns. `char[280]` on HELIX documented (handedness). |
+| 1.0 | 2026-06-04 | SPLINE: int[72/73/74] now documented as absent (not merely optional) — derived by CSVIN from field counts. pt[12]/pt[13] independently optional confirmed. real[44] absent when no fit points. int[70] upper bits stripped — AI generators use bits 0–4 only. MESH: int[92]/int[95] absent (derived). long[90] formula documented: face section + edge section (int[93] + int[94]×2 values); fixed (90.0) sentinel appended by CSVIN, not a CSV value. real[140] absent when all creases 0.0. long[91] subdivision level absent when 0. Derived counts design principle added. MESH added to quick reference. Duplicate POLYLINE entry removed. source: convention for AI-generated content added. |
 | 1.0 | 2026-06-02 | POLYLINE/VERTEX fully corrected from verified CSVOUT output: spline-fit insert vertex is int[70]=18 (16+2, not 16); int[70]=4 on VERTEX is invalid — never emit; 3D polyline vertex flag is int[70]=32 (not 16); int[70]=128 linetype pattern applies to 2D only; curve-fit interleaving confirmed (original int[70]=2 with angle[50], generated int[70]=1 with real[42]). sample_polylines.csv added. |
 | 1.0 | 2026-05-31 | `-dsm` import flag added with `-dwg`/`-dxf` output flags. `sha1:781e2fb2654f` (`new.dxf`) added to sha1 library with download URL and structure description. CSVIN modify/create modes documented in design principle. HATCH corrections: `angle[52]` not always 0; `long[98]` absent when not associative; `real[40]`/`angle[50]`/`angle[51]` confirmed comma-delimited for multiple circle boundaries; `_U` added as valid user-defined pattern name. AI generation promoted to first-class source in generating section. Basic usage restructured — ribbon/command interface first, CLI as secondary. |
 | 1.0 | 2026-05-16 | HATCH fully documented from real-world examples: complete column table, circle boundary encoding, SOLID fill, custom pattern names, parallel comma-delimited arrays. HATCH added to CSVIN supported entities. text[1]/name[2]/layer[8] column role disambiguation added to AI generation guidance — these three are never interchangeable. |
