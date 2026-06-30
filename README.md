@@ -16,7 +16,7 @@ If you have been given a link to this repository or to `spec.md`, you are expect
 read the spec and generate or interpret DXF-CSV content accordingly.
 
 **Read the spec:**
-`https://raw.githubusercontent.com/drawingsync/dxf-csv/main/spec.md`
+`https://raw.githubusercontent.com/dwgsync/dxf-csv/main/spec.md`
 
 **Quick start for generation:** Use `sha1:396cb2c5a30e` (empty AutoCAD 2018 template)
 when generating a DXF-CSV from scratch. Include `name[2]` in every header.
@@ -31,7 +31,7 @@ office furniture layouts, and paper space title blocks — all imported into Aut
 
 **Drawing Sync** is the AutoCAD plug-in that produces and consumes DXF-CSV files.
 
-- Autodesk App Store: [Drawing Sync](https://apps.autodesk.com/ACD/en/Detail/Index?id=2869345163028381616&appLang=en&os=Win64)
+- Autodesk App Store: [Drawing Sync](https://apps.autodesk.com)
 - Direct download: `https://drawingsync.com/downloads/DrawingSync-2027-x64.msi`
 - Command reference: `https://drawingsync.com/docs/help.html`
 
@@ -56,6 +56,9 @@ dwgsync.exe new.dxf -dsm drawing.csv -dxf out.dxf       ← import to DXF
 | `new.dxf` / `new.dxf.txt` | Minimal valid DXF 2018 template — `sha1:781e2fb2654f`. Use as the target for `-dsm` imports to produce clean DXF output without AutoCAD installed |
 | `sample_entities.csv` | One row per supported entity type — encoding reference |
 | `sample_tables.csv` | LAYER, LTYPE, STYLE table reference |
+| `sample_csvout_reference.csv` | Curated CSVOUT output — structural variants of HATCH, MLINE, SPLINE, POLYLINE, MESH, DIMENSION, and TEXT alignment with inline `_ai` notes |
+| `sample_polylines.csv` | Verified CSVOUT for all POLYLINE/VERTEX flag combinations — polygon mesh, polyface, 3D polyline, spline-fit, curve-fit |
+| `sample_mtext.csv` | Periodic table built from MTEXT — demonstrates background fill, column height, line spacing, and `\W` overflow handling |
 | `sample_ai_bracket.csv` | AI-generated mechanical bracket — `sha1:396cb2c5a30e` |
 | `sample_ai_electrical.csv` | AI-generated 208V 3-phase electrical schematic — `sha1:396cb2c5a30e` |
 
@@ -84,6 +87,7 @@ Column prefixes: `pt` = 3D point, `real` = float, `angle` = degrees, `int` = int
 | sha1 | Description |
 |---|---|
 | `396cb2c5a30e` | Empty AutoCAD 2018 template — use when generating from scratch |
+| `000000000000` | AI-generated placeholder — accepted by CSVIN as equivalent to `396cb2c5a30e` |
 | `781e2fb2654f` | `new.dxf` in this repo — minimal DXF template for clean output via `-dsm` |
 
 sha1 values are git blob hashes. Verify with `git hash-object --no-filters <file>`.
